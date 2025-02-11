@@ -462,9 +462,9 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     /// Analyze a single image
     func analyzeImage(image: UIImage, position: AVCaptureDevice.Position,
                       barcodeScannerOptions: BarcodeScannerOptions?, callback: @escaping BarcodeScanningCallback) {
-        let uiImage: UIImage
+        var uiImage: UIImage
         if (invertCurrentImage) {
-            uiImage = self.invertInputImage(image: uiImage)
+            uiImage = self.invertInputImage(image: image)
         } else {
             uiImage = image
         }
@@ -485,14 +485,9 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         
         let filter: CIFilter?
         
-        if #available(iOS 13.0, *) {
-            filter = CIFilter.colorInvert()
-            filter?.setValue(ciImage, forKey: kCIInputImageKey)
-        } else {
             filter = CIFilter(name: "CIColorInvert")
             filter?.setValue(ciImage, forKey: kCIInputImageKey)
-        }
-    
+
         let outputImage = filter?.outputImage
         let cgImage = convertCIImageToCGImage(inputImage: outputImage!)
 
