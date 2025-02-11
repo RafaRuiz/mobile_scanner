@@ -48,9 +48,9 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 
     var detectionSpeed: DetectionSpeed = DetectionSpeed.noDuplicates
 
-    var shouldConsiderInvertedImages: Bool = false
+    var invertImage: Bool = false
     // local variable to invert this image only this time,
-    // it changes based on [shouldConsiderInvertedImages] and
+    // it changes based on [invertImage] and
     // it defaults as false
     private var invertCurrentImage: Bool = false
 
@@ -153,7 +153,7 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 
             // Invert every other frame.
             let uiImage : UIImage
-            if (shouldConsiderInvertedImages) {
+            if (invertImage) {
                invertCurrentImage = !invertCurrentImage
             }
             if (invertCurrentImage) {
@@ -192,9 +192,9 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     }
 
     /// Start scanning for barcodes
-    func start(barcodeScannerOptions: BarcodeScannerOptions?, cameraPosition: AVCaptureDevice.Position, shouldConsiderInvertedImages: Bool, torch: Bool, detectionSpeed: DetectionSpeed, completion: @escaping (MobileScannerStartParameters) -> ()) throws {
+    func start(barcodeScannerOptions: BarcodeScannerOptions?, cameraPosition: AVCaptureDevice.Position, invertImage: Bool, torch: Bool, detectionSpeed: DetectionSpeed, completion: @escaping (MobileScannerStartParameters) -> ()) throws {
         self.detectionSpeed = detectionSpeed
-        self.shouldConsiderInvertedImages = shouldConsiderInvertedImages
+        self.invertImage = invertImage
         if (device != nil || captureSession != nil) {
             throw MobileScannerError.alreadyStarted
         }
@@ -380,8 +380,8 @@ public class MobileScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         } catch(_) {}
     }
 
-    func setShouldConsiderInvertedImages(_ shouldConsiderInvertedImages: Bool) {
-        self.shouldConsiderInvertedImages = shouldConsiderInvertedImages
+    func setInvertImage(_ invertImage: Bool) {
+        self.invertImage = invertImage
     }
     
     /// Turn the torch on.

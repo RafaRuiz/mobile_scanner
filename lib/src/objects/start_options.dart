@@ -15,7 +15,7 @@ class StartOptions {
     required this.returnImage,
     required this.torchEnabled,
     required this.useNewCameraSelector,
-    required this.shouldConsiderInvertedImages,
+    required this.invertImage,
   });
 
   /// The direction for the camera.
@@ -25,7 +25,7 @@ class StartOptions {
   final Size? cameraResolution;
 
   /// Whether the scanner should try to detect color-inverted barcodes in every other frame.
-  final bool shouldConsiderInvertedImages;
+  final bool invertImage;
 
   /// The detection speed for the scanner.
   final DetectionSpeed detectionSpeed;
@@ -62,7 +62,7 @@ class StartOptions {
       'timeout': detectionTimeoutMs,
       'torch': torchEnabled,
       'useNewCameraSelector': useNewCameraSelector,
-      'shouldConsiderInvertedImages': shouldConsiderInvertedImages,
+      'invertImage': invertImage,
     };
   }
 }

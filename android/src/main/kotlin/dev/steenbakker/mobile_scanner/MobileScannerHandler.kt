@@ -118,13 +118,13 @@ class MobileScannerHandler(
                     }
                 })
             "start" -> start(call, result)
+            "pause" -> pause(result)
             "stop" -> stop(result)
             "toggleTorch" -> toggleTorch(result)
             "analyzeImage" -> analyzeImage(call, result)
             "setScale" -> setScale(call, result)
             "resetScale" -> resetScale(result)
             "updateScanWindow" -> updateScanWindow(call, result)
-            "setShouldConsiderInvertedImages" -> setShouldConsiderInvertedImages(call, result)
             else -> result.notImplemented()
         }
     }
@@ -138,13 +138,12 @@ class MobileScannerHandler(
         val speed: Int = call.argument<Int>("speed") ?: 1
         val timeout: Int = call.argument<Int>("timeout") ?: 250
         val cameraResolutionValues: List<Int>? = call.argument<List<Int>>("cameraResolution")
-        val useNewCameraSelector: Boolean = call.argument<Boolean>("useNewCameraSelector") ?: false
         val cameraResolution: Size? = if (cameraResolutionValues != null) {
             Size(cameraResolutionValues[0], cameraResolutionValues[1])
         } else {
             null
         }
-        val shouldConsiderInvertedImages: Boolean = call.argument<Boolean>("shouldConsiderInvertedImages") ?: false
+        val invertImage: Boolean = call.argument<Boolean>("invertImage") ?: false
 
         val barcodeScannerOptions: BarcodeScannerOptions? = buildBarcodeScannerOptions(formats)
 
@@ -211,18 +210,20 @@ class MobileScannerHandler(
             },
             timeout.toLong(),
             cameraResolution,
-            useNewCameraSelector,
-            shouldConsiderInvertedImages,
+            invertImage,
         )
     }
 
-    private fun setShouldConsiderInvertedImages(call: MethodCall, result: MethodChannel.Result) {
-        val shouldConsiderInvertedImages = call.argument<Boolean?>("shouldConsiderInvertedImages")
-
-        if (shouldConsiderInvertedImages != null)
-            mobileScanner?.shouldConsiderInvertedImages = shouldConsiderInvertedImages
-
-        result.success(null)
+    private fun pause(result: MethodChannel.Result) {
+        try {
+            mobileScanner!!.pause()
+            result.success(null)
+        } catch (e: Exception) {
+            when (e) {
+                is AlreadyPaused, is AlreadyStopped -> result.success(null)
+                else -> throw e
+            }
+        }
     }
 
     private fun stop(result: MethodChannel.Result) {

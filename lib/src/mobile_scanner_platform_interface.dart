@@ -112,7 +112,7 @@ abstract class MobileScannerPlatform extends PlatformInterface {
   }
 
   /// Set inverting image colors in intervals (for negative Data Matrices).
-  Future<void> setShouldConsiderInvertedImages(bool shouldConsiderInvertedImages) {
+  Future<void> setInvertImage(bool invertImage) {
     throw UnimplementedError('setInvertImage() has not been implemented.');
   }
 

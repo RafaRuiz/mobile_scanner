@@ -1,20 +1,20 @@
 package dev.steenbakker.mobile_scanner
 
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
-import android.media.Image
 import android.net.Uri
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Size
 import android.view.Surface
-import android.view.WindowManager
 import androidx.annotation.VisibleForTesting
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -34,10 +34,12 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import dev.steenbakker.mobile_scanner.objects.DetectionSpeed
+import dev.steenbakker.mobile_scanner.objects.MobileScannerErrorCodes
 import dev.steenbakker.mobile_scanner.objects.MobileScannerStartParameters
 import dev.steenbakker.mobile_scanner.utils.YuvToRgbConverter
 import io.flutter.view.TextureRegistry
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import kotlin.math.roundToInt
 
 class MobileScanner(
@@ -51,6 +53,7 @@ class MobileScanner(
     /// Internal variables
     private var cameraProvider: ProcessCameraProvider? = null
     private var camera: Camera? = null
+    private var cameraSelector: CameraSelector? = null
     private var preview: Preview? = null
     private var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
     private var scanner: BarcodeScanner? = null
@@ -60,11 +63,12 @@ class MobileScanner(
 
     /// Configurable variables
     var scanWindow: List<Float>? = null
-    var shouldConsiderInvertedImages: Boolean = false
+    private var invertImage: Boolean = false
     private var invertCurrentImage: Boolean = false
     private var detectionSpeed: DetectionSpeed = DetectionSpeed.NO_DUPLICATES
     private var detectionTimeout: Long = 250
     private var returnImage = false
+    private var isPaused = false
 
     companion object {
         /**
@@ -82,15 +86,23 @@ class MobileScanner(
     val captureOutput = ImageAnalysis.Analyzer { imageProxy -> // YUV_420_888 format
         val mediaImage = imageProxy.image ?: return@Analyzer
 
-        // Invert every other frame.
-        if (shouldConsiderInvertedImages) {
-            invertCurrentImage = !invertCurrentImage // so we jump from one normal to one inverted and viceversa
+        if (invertImage) {
+            invertCurrentImage = !invertCurrentImage
         }
-
         val inputImage = if (invertCurrentImage) {
             invertInputImage(imageProxy)
         } else {
-            InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            val ii = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            val bitmap = Bitmap.createBitmap(imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888)
+            try {
+                val imageFormat = YuvToRgbConverter(activity.applicationContext)
+                imageFormat.yuvToRgb(mediaImage, bitmap)
+            } catch(e: Exception) {
+                println("lol")
+            }
+
+            println("si")
+            ii
         }
 
         if (detectionSpeed == DetectionSpeed.NORMAL && scannerTimeout) {
@@ -133,18 +145,19 @@ class MobileScanner(
                     return@addOnSuccessListener
                 }
 
+                val portrait = (camera?.cameraInfo?.sensorRotationDegrees ?: 0) % 180 == 0
+
                 if (!returnImage) {
                     mobileScannerCallback(
                         barcodeMap,
                         null,
-                        mediaImage.width,
-                        mediaImage.height)
+                        if (portrait) inputImage.width else inputImage.height,
+                        if (portrait) inputImage.height else inputImage.width)
                     return@addOnSuccessListener
                 }
 
                 val bitmap = Bitmap.createBitmap(mediaImage.width, mediaImage.height, Bitmap.Config.ARGB_8888)
                 val imageFormat = YuvToRgbConverter(activity.applicationContext)
-
                 imageFormat.yuvToRgb(mediaImage, bitmap)
 
                 val bmResult = rotateBitmap(bitmap, camera?.cameraInfo?.sensorRotationDegrees?.toFloat() ?: 90f)
@@ -155,6 +168,7 @@ class MobileScanner(
                 val bmWidth = bmResult.width
                 val bmHeight = bmResult.height
                 bmResult.recycle()
+                imageFormat.release()
 
                 mobileScannerCallback(
                     barcodeMap,
@@ -214,34 +228,6 @@ class MobileScanner(
         }
     }
 
-    // Return the best resolution for the actual device orientation.
-    //
-    // By default the resolution is 480x640, which is too low for ML Kit.
-    // If the given resolution is not supported by the display,
-    // the closest available resolution is used.
-    //
-    // The resolution should be adjusted for the display rotation, to preserve the aspect ratio.
-    @Suppress("deprecation")
-    private fun getResolution(cameraResolution: Size): Size {
-        val rotation = if (Build.VERSION.SDK_INT >= 30) {
-            activity.display!!.rotation
-        } else {
-            val windowManager = activity.applicationContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-
-            windowManager.defaultDisplay.rotation
-        }
-
-        val widthMaxRes = cameraResolution.width
-        val heightMaxRes = cameraResolution.height
-
-        val targetResolution = if (rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_180) {
-            Size(widthMaxRes, heightMaxRes) // Portrait mode
-        } else {
-            Size(heightMaxRes, widthMaxRes) // Landscape mode
-        }
-        return targetResolution
-    }
-
     /**
      * Start barcode scanning by initializing the camera and barcode scanner.
      */
@@ -257,16 +243,30 @@ class MobileScanner(
         mobileScannerStartedCallback: MobileScannerStartedCallback,
         mobileScannerErrorCallback: (exception: Exception) -> Unit,
         detectionTimeout: Long,
-        cameraResolution: Size?,
-        newCameraResolutionSelector: Boolean,
-        shouldConsiderInvertedImages: Boolean,
+        cameraResolutionWanted: Size?,
+        invertImage: Boolean,
     ) {
         this.detectionSpeed = detectionSpeed
         this.detectionTimeout = detectionTimeout
         this.returnImage = returnImage
-        this.shouldConsiderInvertedImages = shouldConsiderInvertedImages
+        this.invertImage = invertImage
 
-        if (camera?.cameraInfo != null && preview != null && textureEntry != null) {
+        if (camera?.cameraInfo != null && preview != null && textureEntry != null && !isPaused) {
+
+           // TODO: resume here for seamless transition
+//            if (isPaused) {
+//                resumeCamera()
+//                mobileScannerStartedCallback(
+//                    MobileScannerStartParameters(
+//                        if (portrait) width else height,
+//                        if (portrait) height else width,
+//                        currentTorchState,
+//                        textureEntry!!.id(),
+//                        numberOfCameras ?: 0
+//                    )
+//                )
+//                return
+//            }
             mobileScannerErrorCallback(AlreadyStarted())
 
             return
@@ -289,7 +289,7 @@ class MobileScanner(
             }
 
             cameraProvider?.unbindAll()
-            textureEntry = textureRegistry.createSurfaceTexture()
+            textureEntry = textureEntry ?: textureRegistry.createSurfaceTexture()
 
             // Preview
             val surfaceProvider = Preview.SurfaceProvider { request ->
@@ -316,48 +316,37 @@ class MobileScanner(
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             val displayManager = activity.applicationContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
 
-            if (cameraResolution != null) {
-                if (newCameraResolutionSelector) {
-                    val selectorBuilder = ResolutionSelector.Builder()
-                    selectorBuilder.setResolutionStrategy(
-                        ResolutionStrategy(
-                            cameraResolution,
-                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+            val cameraResolution =  cameraResolutionWanted ?: Size(1920, 1080)
+
+            val selectorBuilder = ResolutionSelector.Builder()
+            selectorBuilder.setResolutionStrategy(
+                ResolutionStrategy(
+                    cameraResolution,
+                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                )
+            )
+            analysisBuilder.setResolutionSelector(selectorBuilder.build()).build()
+
+            if (displayListener == null) {
+                displayListener = object : DisplayManager.DisplayListener {
+                    override fun onDisplayAdded(displayId: Int) {}
+
+                    override fun onDisplayRemoved(displayId: Int) {}
+
+                    override fun onDisplayChanged(displayId: Int) {
+                        val selector = ResolutionSelector.Builder().setResolutionStrategy(
+                            ResolutionStrategy(
+                                cameraResolution,
+                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                            )
                         )
-                    )
-                    analysisBuilder.setResolutionSelector(selectorBuilder.build()).build()
-                } else {
-                    @Suppress("DEPRECATION")
-                    analysisBuilder.setTargetResolution(getResolution(cameraResolution))
-                }
-
-                if (displayListener == null) {
-                    displayListener = object : DisplayManager.DisplayListener {
-                        override fun onDisplayAdded(displayId: Int) {}
-
-                        override fun onDisplayRemoved(displayId: Int) {}
-
-                        override fun onDisplayChanged(displayId: Int) {
-                            if (newCameraResolutionSelector) {
-                                val selectorBuilder = ResolutionSelector.Builder()
-                                selectorBuilder.setResolutionStrategy(
-                                    ResolutionStrategy(
-                                        cameraResolution,
-                                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
-                                    )
-                                )
-                                analysisBuilder.setResolutionSelector(selectorBuilder.build()).build()
-                            } else {
-                                @Suppress("DEPRECATION")
-                                analysisBuilder.setTargetResolution(getResolution(cameraResolution))
-                            }
-                        }
+                        analysisBuilder.setResolutionSelector(selector.build()).build()
                     }
-
-                    displayManager.registerDisplayListener(
-                        displayListener, null,
-                    )
                 }
+
+                displayManager.registerDisplayListener(
+                    displayListener, null,
+                )
             }
 
             val analysis = analysisBuilder.build().apply { setAnalyzer(executor, captureOutput) }
@@ -369,6 +358,7 @@ class MobileScanner(
                     preview,
                     analysis
                 )
+                cameraSelector = cameraPosition
             } catch(exception: Exception) {
                 mobileScannerErrorCallback(NoCamera())
 
@@ -421,14 +411,47 @@ class MobileScanner(
         }, executor)
 
     }
+
+    /**
+     * Pause barcode scanning.
+     */
+    fun pause() {
+        if (isPaused) {
+            throw AlreadyPaused()
+        } else if (isStopped()) {
+            throw AlreadyStopped()
+        }
+
+        pauseCamera()
+    }
+
     /**
      * Stop barcode scanning.
      */
     fun stop() {
-        if (isStopped()) {
+        if (!isPaused && isStopped()) {
             throw AlreadyStopped()
         }
 
+        releaseCamera()
+    }
+
+    private fun pauseCamera() {
+        // Pause camera by unbinding all use cases
+        cameraProvider?.unbindAll()
+        isPaused = true
+    }
+
+//    private fun resumeCamera() {
+//        // Resume camera by rebinding use cases
+//        cameraProvider?.let { provider ->
+//            val owner = activity as LifecycleOwner
+//            cameraSelector?.let { provider.bindToLifecycle(owner, it, preview) }
+//        }
+//        isPaused = false
+//    }
+
+    private fun releaseCamera() {
         if (displayListener != null) {
             val displayManager = activity.applicationContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
 
@@ -443,14 +466,11 @@ class MobileScanner(
             it.zoomState.removeObservers(owner)
             it.cameraState.removeObservers(owner)
         }
+
         // Unbind the camera use cases, the preview is a use case.
         // The camera will be closed when the last use case is unbound.
         cameraProvider?.unbindAll()
-        cameraProvider = null
-        camera = null
-        preview = null
 
-        // Release the texture for the preview.
         textureEntry?.release()
         textureEntry = null
 
@@ -481,40 +501,45 @@ class MobileScanner(
     /**
      * Inverts the image colours respecting the alpha channel
      */
-    @SuppressLint("UnsafeOptInUsageError")
+    @ExperimentalGetImage
     fun invertInputImage(imageProxy: ImageProxy): InputImage {
         val image = imageProxy.image ?: throw IllegalArgumentException("Image is null")
 
-        // Convert YUV_420_888 image to NV21 format
-        // based on our util helper
+        // Convert YUV_420_888 image to RGB Bitmap
         val bitmap = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
-        YuvToRgbConverter(activity).yuvToRgb(image, bitmap)
+        try {
+            val imageFormat = YuvToRgbConverter(activity.applicationContext)
+            imageFormat.yuvToRgb(image, bitmap)
 
-        // Invert RGB values
-        invertBitmapColors(bitmap)
+            // Create an inverted bitmap
+            val invertedBitmap = invertBitmapColors(bitmap)
+            imageFormat.release()
 
-        return InputImage.fromBitmap(bitmap, imageProxy.imageInfo.rotationDegrees)
-    }
-
-    // Helper function to invert the colors of the bitmap
-    private fun invertBitmapColors(bitmap: Bitmap) {
-        val width = bitmap.width
-        val height = bitmap.height
-        for (x in 0 until width) {
-            for (y in 0 until height) {
-                val pixel = bitmap.getPixel(x, y)
-                val invertedColor = invertColor(pixel)
-                bitmap.setPixel(x, y, invertedColor)
-            }
+            return InputImage.fromBitmap(invertedBitmap, imageProxy.imageInfo.rotationDegrees)
+        } finally {
+            // Release resources
+            bitmap.recycle() // Free up bitmap memory
+            imageProxy.close() // Close ImageProxy
         }
     }
 
-    private fun invertColor(pixel: Int): Int {
-        val alpha = pixel and 0xFF000000.toInt()
-        val red = 255 - (pixel shr 16 and 0xFF)
-        val green = 255 - (pixel shr 8 and 0xFF)
-        val blue = 255 - (pixel and 0xFF)
-        return alpha or (red shl 16) or (green shl 8) or blue
+    // Efficiently invert bitmap colors using ColorMatrix
+    private fun invertBitmapColors(bitmap: Bitmap): Bitmap {
+        val colorMatrix = ColorMatrix().apply {
+            set(floatArrayOf(
+                -1f, 0f, 0f, 0f, 255f,  // Red
+                0f, -1f, 0f, 0f, 255f,  // Green
+                0f, 0f, -1f, 0f, 255f,  // Blue
+                0f, 0f, 0f, 1f, 0f      // Alpha
+            ))
+        }
+        val paint = Paint().apply { colorFilter = ColorMatrixColorFilter(colorMatrix) }
+
+        val invertedBitmap = Bitmap.createBitmap(bitmap.width, bitmap.height, bitmap.config)
+        val canvas = Canvas(invertedBitmap)
+        canvas.drawBitmap(bitmap, 0f, 0f, paint)
+
+        return invertedBitmap
     }
 
     /**
@@ -525,7 +550,15 @@ class MobileScanner(
         scannerOptions: BarcodeScannerOptions?,
         onSuccess: AnalyzerSuccessCallback,
         onError: AnalyzerErrorCallback) {
-        val inputImage = InputImage.fromFilePath(activity, image)
+        val inputImage: InputImage
+
+        try {
+            inputImage = InputImage.fromFilePath(activity, image)
+        } catch (error: IOException) {
+            onError(MobileScannerErrorCodes.ANALYZE_IMAGE_NO_VALID_IMAGE_ERROR_MESSAGE)
+
+            return
+        }
 
         // Use a short lived scanner instance, which is closed when the analysis is done.
         val barcodeScanner: BarcodeScanner = barcodeScannerFactory(scannerOptions)

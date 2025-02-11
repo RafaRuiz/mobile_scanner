@@ -117,8 +117,8 @@ public class MobileScannerPlugin: NSObject, FlutterPlugin {
             resetScale(call, result)
         case "updateScanWindow":
             updateScanWindow(call, result)
-        case "setShouldConsiderInvertedImages":
-            setShouldConsiderInvertedImages(call, result)
+        case "setInvertImage":
+            setInvertImage(call, result)
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -130,7 +130,7 @@ public class MobileScannerPlugin: NSObject, FlutterPlugin {
         let facing: Int = (call.arguments as! Dictionary<String, Any?>)["facing"] as? Int ?? 1
         let formats: Array<Int> = (call.arguments as! Dictionary<String, Any?>)["formats"] as? Array ?? []
         let returnImage: Bool = (call.arguments as! Dictionary<String, Any?>)["returnImage"] as? Bool ?? false
-        let shouldConsiderInvertedImages: Bool = (call.arguments as! Dictionary<String, Any?>)["shouldConsiderInvertedImages"] as? Bool ?? false
+        let invertImage: Bool = (call.arguments as! Dictionary<String, Any?>)["invertImage"] as? Bool ?? false
         let speed: Int = (call.arguments as! Dictionary<String, Any?>)["speed"] as? Int ?? 0
         let timeoutMs: Int = (call.arguments as! Dictionary<String, Any?>)["timeout"] as? Int ?? 0
         self.mobileScanner.timeoutSeconds = Double(timeoutMs) / Double(1000)
@@ -142,7 +142,7 @@ public class MobileScannerPlugin: NSObject, FlutterPlugin {
         let detectionSpeed: DetectionSpeed = DetectionSpeed(rawValue: speed)!
 
         do {
-            try mobileScanner.start(barcodeScannerOptions: barcodeOptions, cameraPosition: position, shouldConsiderInvertedImages: shouldConsiderInvertedImages, torch: torch, detectionSpeed: detectionSpeed) { parameters in
+            try mobileScanner.start(barcodeScannerOptions: barcodeOptions, cameraPosition: position, invertImage: invertImage, torch: torch, detectionSpeed: detectionSpeed) { parameters in
                 DispatchQueue.main.async {
                     result([
                         "textureId": parameters.textureId,
@@ -171,15 +171,15 @@ public class MobileScannerPlugin: NSObject, FlutterPlugin {
     }
 
     /// Sets the zoomScale.
-    private func setShouldConsiderInvertedImages(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        let shouldConsiderInvertedImages = call.arguments as? Bool
-        if (shouldConsiderInvertedImages == nil) {
+    private func setInvertImage(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+        let invertImage = call.arguments as? Bool
+        if (invertImage == nil) {
             result(FlutterError(code: "MobileScanner",
-                                message: "You must provide a shouldConsiderInvertedImages (bool) when calling setShouldConsiderInvertedImages",
+                                message: "You must provide a setInvertImage (bool) when calling setInvertImage",
                                 details: nil))
             return
         }
-        mobileScanner.setShouldConsiderInvertedImages(shouldConsiderInvertedImages!)
+        mobileScanner.setInvertImage(invertImage!)
         result(nil)
     }
 
