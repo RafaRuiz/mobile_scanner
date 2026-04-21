@@ -61,6 +61,13 @@ class MobileScanner(
     private var scannerTimeout = false
     private var displayListener: DisplayManager.DisplayListener? = null
 
+    /// Pooled across frames to avoid per-call allocation of RenderScript /
+    /// ByteArray / ByteArrayOutputStream. Used from the ImageAnalysis callback
+    /// thread only — not thread-safe by itself.
+    private val yuvConverter: YuvToRgbConverter by lazy {
+        YuvToRgbConverter(activity.applicationContext)
+    }
+
     /// Configurable variables
     var scanWindow: List<Float>? = null
     private var invertImage: Boolean = false
@@ -147,8 +154,7 @@ class MobileScanner(
                 }
 
                 val bitmap = Bitmap.createBitmap(mediaImage.width, mediaImage.height, Bitmap.Config.ARGB_8888)
-                val imageFormat = YuvToRgbConverter(activity.applicationContext)
-                imageFormat.yuvToRgb(mediaImage, bitmap)
+                yuvConverter.yuvToRgb(mediaImage, bitmap)
 
                 val bmResult = rotateBitmap(bitmap, camera?.cameraInfo?.sensorRotationDegrees?.toFloat() ?: 90f)
 
@@ -158,7 +164,6 @@ class MobileScanner(
                 val bmWidth = bmResult.width
                 val bmHeight = bmResult.height
                 bmResult.recycle()
-                imageFormat.release()
 
                 mobileScannerCallback(
                     barcodeMap,
@@ -500,13 +505,11 @@ class MobileScanner(
         val image = imageProxy.image ?: throw IllegalArgumentException("Image is null")
 
         val bitmap = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
-        val imageFormat = YuvToRgbConverter(activity.applicationContext)
         try {
-            imageFormat.yuvToRgb(image, bitmap)
+            yuvConverter.yuvToRgb(image, bitmap)
             val invertedBitmap = invertBitmapColors(bitmap)
             return InputImage.fromBitmap(invertedBitmap, imageProxy.imageInfo.rotationDegrees)
         } finally {
-            imageFormat.release()
             bitmap.recycle()
         }
     }
