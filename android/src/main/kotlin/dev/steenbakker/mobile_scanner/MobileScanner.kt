@@ -92,17 +92,7 @@ class MobileScanner(
         val inputImage = if (invertCurrentImage) {
             invertInputImage(imageProxy)
         } else {
-            val ii = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-            val bitmap = Bitmap.createBitmap(imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888)
-            try {
-                val imageFormat = YuvToRgbConverter(activity.applicationContext)
-                imageFormat.yuvToRgb(mediaImage, bitmap)
-            } catch(e: Exception) {
-                println("lol")
-            }
-
-            println("si")
-            ii
+            InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
         }
 
         if (detectionSpeed == DetectionSpeed.NORMAL && scannerTimeout) {
@@ -499,27 +489,25 @@ class MobileScanner(
     }
 
     /**
-     * Inverts the image colours respecting the alpha channel
+     * Inverts the image colours respecting the alpha channel.
+     *
+     * Ownership note: [imageProxy] is NOT closed here — the caller's
+     * `addOnCompleteListener { imageProxy.close() }` handles that. Closing it
+     * inside this function races the async `scanner.process(...)` pipeline.
      */
     @ExperimentalGetImage
     fun invertInputImage(imageProxy: ImageProxy): InputImage {
         val image = imageProxy.image ?: throw IllegalArgumentException("Image is null")
 
-        // Convert YUV_420_888 image to RGB Bitmap
         val bitmap = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
+        val imageFormat = YuvToRgbConverter(activity.applicationContext)
         try {
-            val imageFormat = YuvToRgbConverter(activity.applicationContext)
             imageFormat.yuvToRgb(image, bitmap)
-
-            // Create an inverted bitmap
             val invertedBitmap = invertBitmapColors(bitmap)
-            imageFormat.release()
-
             return InputImage.fromBitmap(invertedBitmap, imageProxy.imageInfo.rotationDegrees)
         } finally {
-            // Release resources
-            bitmap.recycle() // Free up bitmap memory
-            imageProxy.close() // Close ImageProxy
+            imageFormat.release()
+            bitmap.recycle()
         }
     }
 

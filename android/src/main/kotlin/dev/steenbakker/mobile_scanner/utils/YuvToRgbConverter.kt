@@ -1,104 +1,91 @@
-
-
 package dev.steenbakker.mobile_scanner.utils
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
 import android.media.Image
-import android.renderscript.Allocation
-import android.renderscript.Element
-import android.renderscript.RenderScript
-import android.renderscript.ScriptIntrinsicYuvToRGB
-import android.renderscript.Type
-import java.nio.ByteBuffer
+import java.io.ByteArrayOutputStream
 
 /**
- * Helper class used to efficiently convert a [Media.Image] object from
- * YUV_420_888 format to an RGB [Bitmap] object.
+ * Converts a YUV_420_888 [Image] into an RGB [Bitmap].
  *
- * Copied from https://github.com/owahltinez/camerax-tflite/blob/master/app/src/main/java/com/android/example/camerax/tflite/YuvToRgbConverter.kt
- *
- * The [yuvToRgb] method is able to achieve the same FPS as the CameraX image
- * analysis use case at the default analyzer resolution, which is 30 FPS with
- * 640x480 on a Pixel 3 XL device.
+ * Uses [YuvImage] + JPEG + [BitmapFactory] — all stable `android.graphics` APIs.
+ * Replaces the previous `android.renderscript` implementation, which was
+ * deprecated in Android 12 and produced uniform-colour output on recent
+ * arm64 emulators.
  */
-/// TODO: Upgrade to implementation without deprecated android.renderscript, but with same or better performance. See https://github.com/juliansteenbakker/mobile_scanner/issues/1142
-class YuvToRgbConverter(context: Context) {
-    @Suppress("DEPRECATION")
-    private val rs = RenderScript.create(context)
-    @Suppress("DEPRECATION")
-    private val scriptYuvToRgb =
-        ScriptIntrinsicYuvToRGB.create(rs, Element.U8_4(rs))
+class YuvToRgbConverter(@Suppress("UNUSED_PARAMETER") context: Context) {
 
-    private var yuvBits: ByteBuffer? = null
-    private var bytes: ByteArray = ByteArray(0)
-    @Suppress("DEPRECATION")
-    private var inputAllocation: Allocation? = null
-    @Suppress("DEPRECATION")
-    private var outputAllocation: Allocation? = null
-
-    @Synchronized
     fun yuvToRgb(image: Image, output: Bitmap) {
+        val decoded = yuvToBitmap(image) ?: return
         try {
-            val yuvBuffer = YuvByteBuffer(image, yuvBits)
-            yuvBits = yuvBuffer.buffer
-
-            if (needCreateAllocations(image, yuvBuffer)) {
-                createAllocations(image, yuvBuffer)
-            }
-
-            yuvBuffer.buffer.get(bytes)
-            @Suppress("DEPRECATION")
-            inputAllocation!!.copyFrom(bytes)
-
-            @Suppress("DEPRECATION")
-            scriptYuvToRgb.setInput(inputAllocation)
-            @Suppress("DEPRECATION")
-            scriptYuvToRgb.forEach(outputAllocation)
-            @Suppress("DEPRECATION")
-            outputAllocation!!.copyTo(output)
-        } catch (e: Exception) {
-            throw IllegalStateException("Failed to convert YUV to RGB", e)
+            Canvas(output).drawBitmap(decoded, 0f, 0f, null)
+        } finally {
+            decoded.recycle()
         }
     }
 
-    private fun needCreateAllocations(image: Image, yuvBuffer: YuvByteBuffer): Boolean {
-        @Suppress("DEPRECATION")
-        return inputAllocation?.type?.x != image.width ||
-                inputAllocation?.type?.y != image.height ||
-                inputAllocation?.type?.yuv != yuvBuffer.type
+    private fun yuvToBitmap(image: Image): Bitmap? {
+        val width = image.width
+        val height = image.height
+        val nv21 = yuvToNv21(image)
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+        val stream = ByteArrayOutputStream()
+        if (!yuvImage.compressToJpeg(Rect(0, 0, width, height), JPEG_QUALITY, stream)) return null
+        val jpegBytes = stream.toByteArray()
+        return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
     }
 
-    private fun createAllocations(image: Image, yuvBuffer: YuvByteBuffer) {
-        @Suppress("DEPRECATION")
-        val yuvType = Type.Builder(rs, Element.U8(rs))
-            .setX(image.width)
-            .setY(image.height)
-            .setYuvFormat(yuvBuffer.type)
-        @Suppress("DEPRECATION")
-        inputAllocation = Allocation.createTyped(
-            rs,
-            yuvType.create(),
-            Allocation.USAGE_SCRIPT
-        )
-        bytes = ByteArray(yuvBuffer.buffer.capacity())
-        @Suppress("DEPRECATION")
-        val rgbaType = Type.Builder(rs, Element.RGBA_8888(rs))
-            .setX(image.width)
-            .setY(image.height)
-        @Suppress("DEPRECATION")
-        outputAllocation = Allocation.createTyped(
-            rs,
-            rgbaType.create(),
-            Allocation.USAGE_SCRIPT
-        )
+    // Packs a YUV_420_888 image into NV21 byte layout, respecting row and pixel strides.
+    private fun yuvToNv21(image: Image): ByteArray {
+        val width = image.width
+        val height = image.height
+        val ySize = width * height
+        val nv21 = ByteArray(ySize + ySize / 2)
+
+        val yPlane = image.planes[0]
+        val yBuf = yPlane.buffer.duplicate()
+        val yRowStride = yPlane.rowStride
+        if (yRowStride == width) {
+            yBuf.get(nv21, 0, ySize)
+        } else {
+            for (row in 0 until height) {
+                yBuf.position(row * yRowStride)
+                yBuf.get(nv21, row * width, width)
+            }
+        }
+
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+        val uBuf = uPlane.buffer.duplicate()
+        val vBuf = vPlane.buffer.duplicate()
+        val uRowStride = uPlane.rowStride
+        val vRowStride = vPlane.rowStride
+        val uPixelStride = uPlane.pixelStride
+        val vPixelStride = vPlane.pixelStride
+        val halfW = width / 2
+        val halfH = height / 2
+
+        for (row in 0 until halfH) {
+            val dstRow = ySize + row * width
+            for (col in 0 until halfW) {
+                val idx = dstRow + col * 2
+                nv21[idx] = vBuf.get(row * vRowStride + col * vPixelStride)
+                nv21[idx + 1] = uBuf.get(row * uRowStride + col * uPixelStride)
+            }
+        }
+
+        return nv21
     }
 
-    @Suppress("DEPRECATION")
-    fun release() {
-        inputAllocation?.destroy()
-        outputAllocation?.destroy()
-        scriptYuvToRgb.destroy()
-        rs.destroy()
+    /** No-op. Kept for API compatibility with the previous RenderScript-based implementation. */
+    fun release() {}
+
+    companion object {
+        private const val JPEG_QUALITY = 90
     }
 }
